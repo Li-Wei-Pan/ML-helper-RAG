@@ -12,4 +12,5 @@ dependencies = [
     "langchain-text-splitters>=1.1.2",
     "ipykernel>=7.2.0",
     "psycopg2>=2.9.12",
+    "pypdf>=6.10.2",
 ]
