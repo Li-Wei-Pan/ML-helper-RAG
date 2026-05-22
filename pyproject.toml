@@ -13,4 +13,6 @@ dependencies = [
     "ipykernel>=7.2.0",
     "psycopg2>=2.9.12",
     "pypdf>=6.10.2",
+    "streamlit>=1.57.0",
+    "matplotlib>=3.10.9",
 ]
