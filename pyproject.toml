@@ -15,4 +15,7 @@ dependencies = [
     "pypdf>=6.10.2",
     "streamlit>=1.57.0",
     "matplotlib>=3.10.9",
+    "fastapi>=0.139.0",
+    "nbimporter>=0.3.4",
+    "import-ipynb>=0.2",
 ]

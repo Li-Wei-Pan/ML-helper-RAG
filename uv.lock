@@ -137,6 +137,15 @@ wheels = [
 ]
 
 [[package]]
+name = "annotated-doc"
+version = "0.0.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/57/ba/046ceea27344560984e26a590f90bc7f4a75b06701f653222458922b558c/annotated_doc-0.0.4.tar.gz", hash = "sha256:fbcda96e87e9c92ad167c2e53839e57503ecfda18804ea28102353485033faa4", size = 7288, upload-time = "2025-11-10T22:07:42.062Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1e/d3/26bf1008eb3d2daa8ef4cacc7f3bfdc11818d111f7e2d0201bc6e3b49d45/annotated_doc-0.0.4-py3-none-any.whl", hash = "sha256:571ac1dc6991c450b25a9c2d84a3705e2ae7a53467b5d111c24fa8baabbed320", size = 5303, upload-time = "2025-11-10T22:07:40.673Z" },
+]
+
+[[package]]
 name = "annotated-types"
 version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -598,6 +607,31 @@ wheels = [
 ]
 
 [[package]]
+name = "fastapi"
+version = "0.139.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "annotated-doc" },
+    { name = "pydantic" },
+    { name = "starlette" },
+    { name = "typing-extensions" },
+    { name = "typing-inspection" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d3/af/a5f50ccfa659ec1802cb4ca842c23f06d906a8cc9aef6016a2caeea3d4ed/fastapi-0.139.0.tar.gz", hash = "sha256:99ab7b2d92223c76d6cf10757ab3f89d45b38267fc20b2a136cf02f6beac3145", size = 423016, upload-time = "2026-07-01T16:35:33.436Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9e/7c/8e3c6ad324ea5cb36604fc3f968554887891c316d9dfde57761611d907ad/fastapi-0.139.0-py3-none-any.whl", hash = "sha256:cf15e1e9e667ddb0ad63811e60bd11390d1aac838ca4a7a23f421807b2308189", size = 130339, upload-time = "2026-07-01T16:35:32.19Z" },
+]
+
+[[package]]
+name = "fastjsonschema"
+version = "2.21.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/20/b5/23b216d9d985a956623b6bd12d4086b60f0059b27799f23016af04a74ea1/fastjsonschema-2.21.2.tar.gz", hash = "sha256:b1eb43748041c880796cd077f1a07c3d94e93ae84bba5ed36800a33554ae05de", size = 374130, upload-time = "2025-08-14T18:49:36.666Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cb/a8/20d0723294217e47de6d9e2e40fd4a9d2f7c4b6ef974babd482a59743694/fastjsonschema-2.21.2-py3-none-any.whl", hash = "sha256:1c797122d0a86c5cace2e54bf4e819c36223b552017172f32c5c024a6b77e463", size = 24024, upload-time = "2025-08-14T18:49:34.776Z" },
+]
+
+[[package]]
 name = "filetype"
 version = "1.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -920,6 +954,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/ce/cc/762dfb036166873f0059f3b7de4565e1b5bc3d6f28a414c13da27e442f99/idna-3.13.tar.gz", hash = "sha256:585ea8fe5d69b9181ec1afba340451fba6ba764af97026f92a91d4eef164a242", size = 194210, upload-time = "2026-04-22T16:42:42.314Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5d/13/ad7d7ca3808a898b4612b6fe93cde56b53f3034dcde235acb1f0e1df24c6/idna-3.13-py3-none-any.whl", hash = "sha256:892ea0cde124a99ce773decba204c5552b69c3c67ffd5f232eb7696135bc8bb3", size = 68629, upload-time = "2026-04-22T16:42:40.909Z" },
+]
+
+[[package]]
+name = "import-ipynb"
+version = "0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "ipython" },
+    { name = "nbformat" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7d/5f/07f93b0e5a94b69a65eb108290ae0544210affeb24ec20cf219fe60b4e8e/import-ipynb-0.2.tar.gz", hash = "sha256:0a6db02db7973a35ed1bf007b837288b13374897282218e226d01a1eaecaff85", size = 5376, upload-time = "2024-10-09T06:04:53.734Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ec/62/e0b830773060d2a390aa923dcc8afc680d798bdbdadb6394f760fac62517/import_ipynb-0.2-py3-none-any.whl", hash = "sha256:cb9e41c65dd81ebaa8e1e3e1b591276f910fbaac9238960d6798aad28d4c323f", size = 4005, upload-time = "2024-10-09T06:04:52.598Z" },
 ]
 
 [[package]]
@@ -1595,11 +1642,14 @@ source = { virtual = "." }
 dependencies = [
     { name = "bs4" },
     { name = "dotenv" },
+    { name = "fastapi" },
+    { name = "import-ipynb" },
     { name = "ipykernel" },
     { name = "langchain", extra = ["google-genai", "openai"] },
     { name = "langchain-community" },
     { name = "langchain-text-splitters" },
     { name = "matplotlib" },
+    { name = "nbimporter" },
     { name = "psycopg2" },
     { name = "pypdf" },
     { name = "streamlit" },
@@ -1609,11 +1659,14 @@ dependencies = [
 requires-dist = [
     { name = "bs4", specifier = ">=0.0.2" },
     { name = "dotenv", specifier = ">=0.9.9" },
+    { name = "fastapi", specifier = ">=0.139.0" },
+    { name = "import-ipynb", specifier = ">=0.2" },
     { name = "ipykernel", specifier = ">=7.2.0" },
     { name = "langchain", extras = ["google-genai", "openai"], specifier = ">=1.2.15" },
     { name = "langchain-community", specifier = ">=0.4.1" },
     { name = "langchain-text-splitters", specifier = ">=1.1.2" },
     { name = "matplotlib", specifier = ">=3.10.9" },
+    { name = "nbimporter", specifier = ">=0.3.4" },
     { name = "psycopg2", specifier = ">=2.9.12" },
     { name = "pypdf", specifier = ">=6.10.2" },
     { name = "streamlit", specifier = ">=1.57.0" },
@@ -1734,6 +1787,30 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/e9/f3/257adc69a71011b4c8cda321b00f02c5bf1980ae38ffd05a58d9632d4de8/narwhals-2.20.0.tar.gz", hash = "sha256:c10994975fa7dc5a68c2cffcddbd5908fc8ebb2d463c5bab085309c0ee1f551e", size = 627848, upload-time = "2026-04-20T12:11:45.427Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d0/69/f24d3d1c38ad69e256138b4ec2452a8c7cf66be49dc214771ae99dd4f0a0/narwhals-2.20.0-py3-none-any.whl", hash = "sha256:16e750ea5507d4ba6e8d03455b5f93a535e0405976561baea235bca5dc9f475d", size = 449373, upload-time = "2026-04-20T12:11:43.596Z" },
+]
+
+[[package]]
+name = "nbformat"
+version = "5.10.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "fastjsonschema" },
+    { name = "jsonschema" },
+    { name = "jupyter-core" },
+    { name = "traitlets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6d/fd/91545e604bc3dad7dca9ed03284086039b294c6b3d75c0d2fa45f9e9caf3/nbformat-5.10.4.tar.gz", hash = "sha256:322168b14f937a5d11362988ecac2a4952d3d8e3a2cbeb2319584631226d5b3a", size = 142749, upload-time = "2024-04-04T11:20:37.371Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a9/82/0340caa499416c78e5d8f5f05947ae4bc3cba53c9f038ab6e9ed964e22f1/nbformat-5.10.4-py3-none-any.whl", hash = "sha256:3b48d6c8fbca4b299bf3982ea7db1af21580e4fec269ad087b9e81588891200b", size = 78454, upload-time = "2024-04-04T11:20:34.895Z" },
+]
+
+[[package]]
+name = "nbimporter"
+version = "0.3.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/cc/37/fe36c6e8937bc36400126804fc4adb54b2ddc838e8f4bdbeafd6bb26205b/nbimporter-0.3.4.tar.gz", hash = "sha256:bc9bc803e7ba44ae9f7c6ec60cae2f4d1d509508feedd8c9e03a7949333bf16e", size = 4856, upload-time = "2021-03-08T10:40:40.029Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c4/fe/a85b96f9b362f206203be7aa7d811ada4abdfbba8892102c356d43ee90aa/nbimporter-0.3.4-py3-none-any.whl", hash = "sha256:14a4c37fd4a3e18ad5fba726d54f2e46b483dfe31c1f036682bb9ef259ab67a3", size = 4905, upload-time = "2021-03-08T10:40:38.84Z" },
 ]
 
 [[package]]
