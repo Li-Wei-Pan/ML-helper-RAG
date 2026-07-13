@@ -1,14 +1,16 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from  typing import Optional, List
 from langsmith import uuid7
 import json
 import time
 import os
+import asyncio
 from dotenv import load_dotenv
 load_dotenv()
 from langchain_openai import OpenAIEmbeddings
-from utils import embed_single, build_context_with_budget,get_section_history, get_openai_callback, pre_flight_check, num_tokens_from_strings
+from openai import RateLimitError, APIError
+from utils import embed_single, build_context_with_budget,get_section_history, get_openai_callback, pre_flight_check, num_tokens_from_strings, api_log_request,estimate_cost,log_rejected_request
 from langchain_openai import ChatOpenAI
 from contextlib import asynccontextmanager
 from langchain_postgres import PGVector
@@ -17,6 +19,10 @@ from langchain_core.runnables.history import RunnableWithMessageHistory
 from sqlalchemy.ext.asyncio import create_async_engine
 from pydantic import Field
 from datetime import datetime
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi import Limiter, _rate_limit_exceeded_handler
+import sqlalchemy
 
 OPENAI_KEY = os.getenv('OPEN_AI_KEY')
 CONNECTION_STRING =os.getenv('CONNECTION_KEY_ASYNC')
@@ -31,7 +37,13 @@ async def lifespan(app: FastAPI):
         print(f"Original: {CONNECTION_STRING[:50]}")
         async_connection = CONNECTION_STRING.replace("postgresql://",
                                                      "postgresql+asyncpg://")
-        async_engine = create_async_engine(async_connection)
+        
+    
+        async_engine = create_async_engine(async_connection, connect_args = {'options': "-c hnsw.ef_search=40"})
+  
+        async with async_engine.connect() as conn:
+            await conn.execute(sqlalchemy.text('select 1'))
+
         print(f"Async: {async_connection[:60]}")
         db = PGVector(
             embeddings=embeddings,
@@ -42,9 +54,6 @@ async def lifespan(app: FastAPI):
         yield
         await async_engine.dispose()
         print('Shutting down')
-
-
-
 
 # embeddings_v2 = OpenAIEmbeddings(
 #     openai_api_key=OPENAI_KEY,
@@ -80,10 +89,17 @@ class LLMOutputSchema(BaseModel):
     answer: str
 
 @app.get('/health')
-def health():
-    return {'status': 'ok'}
+async def health():
+    if db is None:
+        raise HTTPException(status_code = 503, detail = 'Database not ready')
+    try:
+        async with db._async_engine.connect() as conn:
+            await conn.execute(sqlalchemy.text('select 1'))
+        return {'status': 'ok', "database": 'connected'}
+    except Exception as e:
+        raise HTTPException(status_code= 503, detail = f'Database unreachable : {str(e)}')
 
-section_id = str(uuid7())
+
 prompt = ChatPromptTemplate.from_messages([ 
      ("system", """You are a helpful ML assistant.
 
@@ -114,23 +130,50 @@ chain = prompt | structured_model
 #     history_messages_key='history'
 # )
 
+
+# Initialize limiter
+limiter = Limiter(key_func= get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+#apply to endpoint
 @app.post('/query', response_model= QueryResponse)
-async def query_endpoint(request: QueryRequest):
+@limiter.limit('10/minute') 
+async def query_endpoint(request: Request, body: QueryRequest):
+    start_time = time.time()
     # Step 1 — validate input    
-    if not request.question or not request.question.strip():
+    if not body.question or not body.question.strip():
         raise HTTPException(status_code=422, detail="Question cannot be empty")
     if db is None:
          raise HTTPException(status_code=503, detail = 'Database not initialized')
     # Step 2 — embed the question
-    embedded = await embed_single(embeddings, request.question)
+    try:
+
+        embedded = await embed_single(embeddings, body.question)
+    
+    except RateLimitError:
+       raise HTTPException(status_code= 429, detail = 'embedding service rate limit reached')
+    except APIError:
+        raise HTTPException(status_code=503, detail="Embedding service unavailable")  
+    
     # Step 3 — retrieve chunks from pgvector
-    search_results = await db.asimilarity_search_with_score_by_vector(embedded, k = request.top_k)
+    search_results = await db.asimilarity_search_with_score_by_vector(embedded, k = body.top_k)
+    
+    # async with db._async_engine.connect() as conn: #check if it works
+    #     result = await conn.execute(sqlalchemy.text("SET hnsw.ef_search = 40"))
+    #     row = await conn.execute(sqlalchemy.text("SHOW hnsw.ef_search"))
+    # print(f"ef_search: {row.fetchone()[0]}")
+
+    
     # Step 4 — build context
-    passing = [(doc, score) for doc, score in search_results if score <= request.threshold] # <= bc of cos distance
-    print(f"Passing chunks: {len(passing)}, threshold: {request.threshold}")
+    passing = [(doc, score) for doc, score in search_results if score <= body.threshold] # <= bc of cos distance
+    
+    print(f"Passing chunks: {len(passing)}, threshold: {body.threshold}")
     if not passing:
+         duration = time.time() - start_time
+         log_rejected_request(body, duration, reason = 'no relevant chunk found')
          return QueryResponse(answer = 'NO relevant content found for your question', topic = 'unknown', is_in_document= False, sources = [])
-    context = build_context_with_budget(passing, threshold = request.threshold)
+    context = build_context_with_budget(passing, threshold = body.threshold)
     # Step 5 — call LLM
     
     # Step 6 — return structured response
@@ -142,27 +185,16 @@ async def query_endpoint(request: QueryRequest):
         sources=[]
     )
          
-    start_time = time.time()
-    result = chain.invoke({'question': request.question, 'context': context},config={"configurable": {"session_id": section_id}})
+    
+    try:
+        result = await asyncio.wait_for(chain.ainvoke({'question': body.question, 'context': context},config={"configurable": {"session_id": body.session_id}}), timeout= 30)
+    
+    except asyncio.TimeoutError:
+         raise HTTPException(status_code= 503, detail = 'Request timed out')
+    
     duration = time.time() - start_time
-
-    log_entry = {
-        "timestamp": datetime.utcnow().isoformat(),
-        "session_id": request.session_id,
-        "question": request.question,
-        "answer": result.answer,
-        "topic": result.topic,
-        "is_in_document": result.is_in_document,
-        "threshold": request.threshold,
-        "top_k": request.top_k,
-        "duration_seconds": round(duration, 3),
-        "context_chars": len(context)
-    }
-
-    with open('user_api_log.jsonl', 'a') as f:
-        f.write(json.dumps(log_entry) + '\n')
-
-
+    api_log_request(body, result,duration, context)
+    
 
     return QueryResponse(
         answer= result.answer,
@@ -174,3 +206,5 @@ async def query_endpoint(request: QueryRequest):
             "snippet": doc.page_content[:100]
         } for doc, score in passing]
     )
+
+

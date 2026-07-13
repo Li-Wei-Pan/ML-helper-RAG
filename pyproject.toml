@@ -18,4 +18,5 @@ dependencies = [
     "fastapi>=0.139.0",
     "nbimporter>=0.3.4",
     "import-ipynb>=0.2",
+    "slowapi>=0.1.10",
 ]
