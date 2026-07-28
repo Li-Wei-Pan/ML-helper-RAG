@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main, testing]
+  pull_request:
+    branches: [main, testing]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      -name: Checkout code
+       uses: actions/checkout@v4
+
+      -name: Set up Python
+       uses: actions/steup-python@v5
+      
+      -name: Install uv
+        run: pip install uv
+      
+      -name: Install dependencies
+        run: uv pip install --system .
+      
+      -name: Run tests
+        run: pytest tests/test_api.py -v
