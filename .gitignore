@@ -1,2 +1,12 @@
 .env
-\docker
+.venv
+.pyc
+__pycache__
+*.pyc
+*.pyo
+
+
+
+.jsonl
+documents/
+golden_dataset.json
