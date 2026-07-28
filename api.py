@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from langchain_openai import OpenAIEmbeddings
 from openai import RateLimitError, APIError
-from utils import embed_single, build_context_with_budget,get_section_history, get_openai_callback, pre_flight_check, num_tokens_from_strings, api_log_request,estimate_cost,log_rejected_request
+from utils import embed_single, build_context_with_budget,get_section_history, get_openai_callback, pre_flight_check,cross_reranking ,num_tokens_from_strings, api_log_request,estimate_cost,log_rejected_request, get_cross_encoder
 from langchain_openai import ChatOpenAI
 from contextlib import asynccontextmanager
 from langchain_postgres import PGVector
@@ -26,6 +26,7 @@ import sqlalchemy
 
 OPENAI_KEY = os.getenv('OPEN_AI_KEY')
 CONNECTION_STRING =os.getenv('CONNECTION_KEY_ASYNC')
+MAX_CONTEXT_TOKENS = 2000
 
 embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_KEY)
 model = ChatOpenAI(
@@ -65,9 +66,10 @@ app = FastAPI(lifespan= lifespan)
 # request schemea
 class QueryRequest(BaseModel):
     question: str
-    top_k : int = Field(default = 4, ge = 1, le = 20)
+    top_k : int = Field(default = 10, ge = 1, le = 20)
     session_id: str = Field(default_factory= lambda: str(uuid7()))
     threshold: float = Field(default = 0.25, ge = 0.0, le = 1.0)
+    use_reranking: bool = False
 
 # source chunk schema
 class SourceChunk(BaseModel):
@@ -163,21 +165,39 @@ async def query_endpoint(request: Request, body: QueryRequest):
     #     result = await conn.execute(sqlalchemy.text("SET hnsw.ef_search = 40"))
     #     row = await conn.execute(sqlalchemy.text("SHOW hnsw.ef_search"))
     # print(f"ef_search: {row.fetchone()[0]}")
-
-    
-    # Step 4 — build context
     passing = [(doc, score) for doc, score in search_results if score <= body.threshold] # <= bc of cos distance
+    print(f"Before reranking: {len(passing)} chunks")
+    
+    if body.use_reranking:
+        passing = cross_reranking(get_cross_encoder(), body.question, passing)
+        passing = passing[:body.top_k]
+        context_text = "\n\n".join([doc.page_content for doc, _ in passing])
+        print(f"After reranking: {len(passing)} chunks")
+        for doc, score in passing:
+            print(f"Reranker score: {score:.4f} | Page: {doc.metadata.get('page')}")
+    
+    else:
+        budget_result = build_context_with_budget(passing, threshold=body.threshold, max_tokens=2000)
+        context_text = "\n\n".join([doc.page_content for doc, _ in budget_result])
+    # context_text = "\n\n".join([doc.page_content for doc, _ in passing])
+    print(f"Context length: {len(context_text)}")
+    # Step 4 — build context
+    
     
     print(f"Passing chunks: {len(passing)}, threshold: {body.threshold}")
     if not passing:
          duration = time.time() - start_time
          log_rejected_request(body, duration, reason = 'no relevant chunk found')
          return QueryResponse(answer = 'NO relevant content found for your question', topic = 'unknown', is_in_document= False, sources = [])
-    context = build_context_with_budget(passing, threshold = body.threshold)
+    
+    context = build_context_with_budget(passing, threshold = body.threshold, max_tokens = MAX_CONTEXT_TOKENS) 
+    extract_context = [doc for doc, _ in context]
+    context_text = "\n\n".join([doc.page_content for doc in extract_context])
+
     # Step 5 — call LLM
     
     # Step 6 — return structured response
-    if len(context.strip()) < 50:
+    if len(context_text.strip()) < 50:
          return QueryResponse(
         answer='This topic is not covered in the provided material.',
         topic='unknown', 
@@ -187,13 +207,13 @@ async def query_endpoint(request: Request, body: QueryRequest):
          
     
     try:
-        result = await asyncio.wait_for(chain.ainvoke({'question': body.question, 'context': context},config={"configurable": {"session_id": body.session_id}}), timeout= 30)
+        result = await asyncio.wait_for(chain.ainvoke({'question': body.question, 'context': context_text},config={"configurable": {"session_id": body.session_id}}), timeout= 30)
     
     except asyncio.TimeoutError:
          raise HTTPException(status_code= 503, detail = 'Request timed out')
     
     duration = time.time() - start_time
-    api_log_request(body, result,duration, context)
+    api_log_request(body, result,duration, context_text)
     
 
     return QueryResponse(
@@ -202,7 +222,7 @@ async def query_endpoint(request: Request, body: QueryRequest):
         is_in_document=result.is_in_document,
         sources=[{
             "page": doc.metadata.get("page"),
-            "score": round(score, 4),
+            "score": float(round(score, 4)),
             "snippet": doc.page_content[:100]
         } for doc, score in passing]
     )
