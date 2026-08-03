@@ -12,7 +12,6 @@ load_dotenv()
 from langchain_openai import OpenAIEmbeddings
 from openai import RateLimitError, APIError
 from utils import embed_single, build_context_with_budget,get_section_history, get_openai_callback, pre_flight_check,cross_reranking ,num_tokens_from_strings, api_log_request,estimate_cost,log_rejected_request, get_cross_encoder
-from agent import run_agent
 from langchain_openai import ChatOpenAI
 from contextlib import asynccontextmanager
 from langchain_postgres import PGVector
@@ -242,6 +241,7 @@ class AgentResponse(BaseModel):
 @app.post('/agent', response_model= AgentResponse)
 @limiter.limit('2/minute')
 async def agent_api(request: Request, body: AgentRequest):
+    from agent import run_agent
     start_time = time.time()
     if not body.question or not body.question.strip():
         raise HTTPException(status_code=422, detail="Question cannot be empty")
