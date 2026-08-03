@@ -15,11 +15,12 @@ import asyncio
 import datetime
 import sqlalchemy
 import json
-from utils import cross_reranking, evalute_with_reranking, get_cross_encoder
+from utils import cross_reranking, evalute_with_reranking, get_cross_encoder,log_agent_run
 
 load_dotenv()
 OPENAI_KEY = os.getenv('OPEN_AI_KEY')
 CONNECTION_STRING = os.getenv('CONNECTION_KEY')
+print(os.getenv('CONNECTION_KEY'))
 emb_model = OpenAIEmbeddings(openai_api_key=OPENAI_KEY)
 model = ChatOpenAI(
     model="gpt-3.5-turbo",
@@ -29,7 +30,8 @@ model = ChatOpenAI(
 
 client = OpenAI(api_key=OPENAI_KEY)
 
-SYSTEM_PROMPT = """You are an AI agent with access to the following tools:
+SYSTEM_PROMPT = """You are an AI agent with access to the following tools, You MUST use at least one tool before returning a FINAL answer.
+Never answer from your own knowledge without first using a tool.
 
 1. rag_search(query) — Search the ML knowledge base for information about 
    machine learning concepts, algorithms, and techniques.
@@ -82,8 +84,7 @@ async def rag_search( query: str)-> str:
     filtered_results = [i for i in results if  i[1] <= 0.25]
     if not filtered_results:
         return f"NO chunks found"
-        
-
+         
     for doc, score in filtered_results:
         string += doc.page_content+'\n\n'
     return string.strip()
@@ -96,6 +97,14 @@ def calculator(expression):
         return str(result)
     except:
         return "Error: Could not evaluate expression"
+
+def summarize(retrieved_content):
+    summary_prompt = f"""Summarize the {retrieved_content} into short and concise summary. Make sure to include crucial concepts/elements
+    """
+    summary = model.invoke([{'role': 'user',
+                            'content': summary_prompt}])
+
+    return summary.content
 
 
 
@@ -162,6 +171,13 @@ async def math_agent(question):
     
     return f"Failed to do math operations" 
 
+# 3rd sub agent (summarization)
+async def summary_agent(question):
+        retrieved_context = await rag_search(question)
+        result = summarize(retrieved_context)
+        return result
+
+
 async def orchestrator(question, max_attempts):
     ORCHESTRATOR_PROMPT = """You are an orchestrator that routes questions 
     to the right specialist agent.
@@ -221,75 +237,85 @@ async def run_agent(question, max_steps=5, session_id = None,  tools = None, sys
     messages = [{'role': 'system', 'content': system_content}, 
                 {'role': 'user', 'content': question}]
     # Step 2 — define available tools as a dict
-    
     if tools is None:
         tools = {'rag_search': rag_search, 'calculator': calculator}
 
-    base_prompt = system_prompt if system_prompt else SYSTEM_PROMPT    
+    # base_prompt = system_prompt if system_prompt else SYSTEM_PROMPT   
+
+    previous_action= set() # checker
+    tools_used = []
     # Step 3 — start the ReAct loop (max_steps iterations)
     #var to track rag_search()
     retrieved_context = ""
+    final_answer = None
     for step in range(max_steps):
 
         # Step 3a — call the LLM with current messages
         response = await model.ainvoke(messages)
         content = response.content
-
         # Step 3b — check if LLM returned a FINAL answer
         if 'FINAL' in content:
-            final_answer = content.split('FINAL')[-1].strip()
-    
+            final_answer = content.split('FINAL:')[-1].strip()
             save_to_memory(question, final_answer, session_id)
+            log_agent_run(session_id, question, final_answer, step+1, tools_used, True)
             return final_answer,  retrieved_context
 
         # Step 3c — check if LLM returned an ACTION
-
         if "ACTION" not in content:
             return content, ""
-        
+
         # Step 3d — parse ACTION and INPUT from content
         lines = content.strip().split("\n")
         action = None
         tool_input = None
-
+        
         for line in lines:
             if line.startswith('ACTION'):
                 action = line.replace("ACTION:", "").strip()
             if  line.startswith('INPUT'):
                 tool_input = line.replace("INPUT:", "").strip()
+        current = (action, tool_input)
 
+        if current in previous_action:
+            return f'Loop detected '
 
-
+        previous_action.add(current)
         if not action:
             observation = f'No action found'
             print(f"Step {step+1} | ACTION: None | INPUT: {tool_input}")
-            print(f"OBSERVATION: {observation}")
+            tools_used.append((action, tool_input))
+            print(f"OBSERVATION: {str(observation)[:300]}")
         
         elif not tool_input:
             observation = f"Error: no input provided for tool {action}"
+            tools_used.append((action, tool_input))
             print(f"Step {step+1} | ACTION: {action} | INPUT: None")
-            print(f"OBSERVATION: {observation}")
+            print(f"OBSERVATION: {str(observation)[:300]}")
 
         elif action not in tools:
             observation = f"Error: tool {action} not found"
+            tools_used.append((action, tool_input))
             print(f"Step {step+1} | ACTION: {action} | INPUT: {tool_input}")
-            print(f"OBSERVATION: {observation}")
-        
-
+            print(f"OBSERVATION: {str(observation)[:300]}")
         else:
             tool_fn = tools[action]
             if asyncio.iscoroutinefunction(tool_fn):
                 observation = await tool_fn(tool_input)
             else:
                 observation = tool_fn(tool_input)
+
+            tools_used.append((action, tool_input))
             print(f"Step {step+1} | ACTION: {action} | INPUT: {tool_input}")
-            print(f"OBSERVATION: {str(observation)[:200]}")
+
+            print(f"OBSERVATION: {str(observation)[:300]}...")
             if action == "rag_search":
                 retrieved_context = observation 
 
         messages.append({'role': 'assistant', 'content': content})
-        messages.append({'role': 'user', 'content': f'OBSERVATION: {observation}'})
+        messages.append({'role': 'user', 'content': f'OBSERVATION: {str(observation)[:300]}..'})
+
     save_to_memory(question, 'Agent reached maximum steps', session_id)
+    log_agent_run(session_id, question, final_answer, step, tools_used, False)
     return 'Agent reached maximum steps without finding an answer', retrieved_context
 
 async def llm_judge(user_query, retrieved_chunks, agent_answer):

@@ -306,7 +306,7 @@ def validate_question(question_text, existing_question):
     return True
 
 
-
+MIN_DATASET_SIZE = 50
 def build_golden_dataset(db, embeddings, engine, n_chunks = 25, question_per_chunk = 2):
     existing_questions_set = set()
 
@@ -316,6 +316,9 @@ def build_golden_dataset(db, embeddings, engine, n_chunks = 25, question_per_chu
             json_data = json.load(f)
             # Extract strings into a fast O(1) lookup set
             existing_questions_set = {item['question'] for item in json_data}
+            if len(json_data) >= MIN_DATASET_SIZE:
+                print(f"Dataset already has {len(json_data)} questions — skipping generation")
+                return json_data
     else:
 
         print('No existing path found, creating a new file named golden_dataset.json.')
@@ -359,3 +362,20 @@ def evalute_with_reranking(golden_dataset, embedding_model, db, cross_model, top
             cross_hits += 1
         
     return f"Vanilla's recall@k: {vanilla_hits } | Cross encoder's recall@k: {cross_hits}"
+
+
+
+def log_agent_run(session_id, question, final_answer, steps_taken, tools_used, success):
+    json_path = 'log_agent.json'
+    log_entry = {
+    'session_id': session_id,
+    'question': question,
+    'final_answer': final_answer,
+    'steps_taken': steps_taken,
+    'tools_used': [list(t) for t in tools_used],
+    'success': success,
+    'timestamp': datetime.utcnow().isoformat()
+}
+    with open(json_path, 'a') as f:
+        f.write(json.dumps(log_entry) + '\n')
+    

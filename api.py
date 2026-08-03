@@ -6,11 +6,13 @@ import json
 import time
 import os
 import asyncio
+import uuid
 from dotenv import load_dotenv
 load_dotenv()
 from langchain_openai import OpenAIEmbeddings
 from openai import RateLimitError, APIError
 from utils import embed_single, build_context_with_budget,get_section_history, get_openai_callback, pre_flight_check,cross_reranking ,num_tokens_from_strings, api_log_request,estimate_cost,log_rejected_request, get_cross_encoder
+from agent import run_agent
 from langchain_openai import ChatOpenAI
 from contextlib import asynccontextmanager
 from langchain_postgres import PGVector
@@ -227,4 +229,38 @@ async def query_endpoint(request: Request, body: QueryRequest):
         } for doc, score in passing]
     )
 
+class AgentRequest(BaseModel):
+    question: str
+    session_id: str = Field(default_factory=lambda: str(uuid7()))
 
+class AgentResponse(BaseModel):
+    answer: str
+    retrieved_context: str
+    session_id:str
+    success: bool 
+
+@app.post('/agent', response_model= AgentResponse)
+@limiter.limit('2/minute')
+async def agent_api(request: Request, body: AgentRequest):
+    start_time = time.time()
+    if not body.question or not body.question.strip():
+        raise HTTPException(status_code=422, detail="Question cannot be empty")
+    else:
+        try: 
+            final_answer, retrieved_context =await asyncio.wait_for(run_agent(question = body.question , session_id = body.session_id), timeout=60)
+
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=503, detail='Request timed out')
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+        success = 'maximum steps' not in final_answer.lower()
+        return AgentResponse(
+            answer = final_answer,
+            retrieved_context= retrieved_context,
+            session_id = body.session_id,
+            success = success
+        )
+    
+       
+    
