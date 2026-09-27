@@ -36,12 +36,12 @@ embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_KEY)
 model = ChatOpenAI(
     model="gpt-3.5-turbo", openai_api_key=OPENAI_KEY, temperature=0)
 
-api_key = {os.getenv("API_KEY")} 
+api_key = os.getenv("API_KEY")
 
 
 security_scheme = HTTPBearer()
 def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security_scheme)):
-    API_KEY = {os.getenv("API_KEY")} 
+
     if not api_key or not secrets.compare_digest(credentials.credentials, api_key):
         raise HTTPException(status_code= status.HTTP_401_UNAUTHORIZED, detail = 'Invalid or missing auth token',
                             headers = {"www-Authenticate": 'Bearer'},)
@@ -175,22 +175,20 @@ async def query_endpoint(request: Request, body: QueryRequest, _ :str = Depends(
     except APIError:
         raise HTTPException(status_code=503, detail="Embedding service unavailable")  
     
-
-    search_results = await db.asimilarity_search_with_score_by_vector(embedded, k = body.top_k * 3)
+    retrieval_k = body.top_k * 3 if body.use_reranking else body.top_k
+    search_results = await db.asimilarity_search_with_score_by_vector(embedded, k = retrieval_k)
     
     passing = [(doc, score) for doc, score in search_results if score <= body.threshold] # <= bc of cos distance
     print(f"Before reranking: {len(passing)} chunks")
     
+  
+
     if body.use_reranking:
         passing = cross_reranking(get_cross_encoder(), body.question, passing)
         passing = passing[:body.top_k]
-        budget_result = build_context_with_budget(passing, threshold=body.threshold, max_tokens=MAX_CONTEXT_TOKENS)
-        context_text = "\n\n".join([doc.page_content for doc, _ in budget_result])
-    
-    else:
-        budget_result = build_context_with_budget(passing, threshold=body.threshold, max_tokens=MAX_CONTEXT_TOKENS)
-        context_text = "\n\n".join([doc.page_content for doc, _ in budget_result])
-    
+
+    budget_result = build_context_with_budget(passing, threshold=body.threshold, max_tokens=MAX_CONTEXT_TOKENS)
+    context_text = "\n\n".join([doc.page_content for doc, _ in budget_result])
     print(f"Context length: {len(context_text)}")
     # Step 4 — build context
     
@@ -201,13 +199,6 @@ async def query_endpoint(request: Request, body: QueryRequest, _ :str = Depends(
          log_rejected_request(body, duration, reason = 'no relevant chunk found')
          return QueryResponse(answer = 'NO relevant content found for your question', topic = 'unknown', is_in_document= False, sources = [])
     
-    context = build_context_with_budget(passing, threshold = body.threshold, max_tokens = MAX_CONTEXT_TOKENS) 
-    extract_context = [doc for doc, _ in context]
-    # context_text = "\n\n".join([doc.page_content for doc in extract_context])
-
-    # Step 5 — call LLM
-    
-    # Step 6 — return structured response
     if len(context_text.strip()) < 50:
          return QueryResponse(
         answer='This topic is not covered in the provided material.',
@@ -233,7 +224,7 @@ async def query_endpoint(request: Request, body: QueryRequest, _ :str = Depends(
             "page": doc.metadata.get("page"),
             "score": float(round(score, 4)),
             "snippet": doc.page_content[:100]
-        } for doc, score in passing]
+        } for doc, score in budget_result]
     )
 
 class AgentRequest(BaseModel):
