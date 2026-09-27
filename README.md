@@ -7,9 +7,9 @@ It's a RAG driven assistant that can solve Machine-Learning related questions an
 
 ## Architecture
 
-Powered by Postgresql's PGVector database to store embeeded chunks and using OpenAI's model as main LLM model. It checks user query's syntax and length to check if it meets the requirements(safety and prevent prompt injection). Retrieval uses pgvector's HNSW index (m=16, ef_search=40) for approximate nearest neighbor search, with cosine distance threshold filtering and optional cross-encoder reranking.
+Powered by Postgresql's PGVector database to store embeeded chunks and using OpenAI's model as main LLM model. It validates that the question is non-empty before processing. Retrieval uses pgvector's HNSW index (m=16, ef_search=40) for approximate nearest neighbor search, with cosine distance threshold filtering and optional cross-encoder reranking.
 
-The orchestrator agent is ReAct and can assign works to three agents(ML, calculator, summary agent) based on user query. The agent will iteratively updating/taking actions based on its current knowledge(INPUT, ACTION). 
+The orchestrator agent is ReAct and can assign works to three agents(ML, calculator) based on user query. The agent will iteratively updating/taking actions based on its current knowledge(INPUT, ACTION). 
 INPUT: the content of user query
 ACTION: the tool it chose to use (ml, math, summary)
 
@@ -20,7 +20,7 @@ Database: PGVector
 OpenAI ada-002 embeddings, turbo 3.5
 sentence-transformer(cross-encoder)
 Pydantic
-Agent orchestrator: machine_learning agent, calculator_agent, summary_agent
+Agent orchestrator: machine_learning agent, calculator_agent
 FastAPI
 Docker
 CI/CD
@@ -68,7 +68,7 @@ RAG retrieval + LLM generation.
   "question": "What is cross-validation?",
   "top_k": 10,
   "threshold": 0.25,
-  "use_reranking": false
+  "use_reranking": true
 }
 ```
 
@@ -83,18 +83,22 @@ ReAct agent with tool orchestration.
 
 ## Evaluation
 
-Evaluated against a 100-question golden dataset generated from the source document.
+Evaluated against a 100-question golden dataset generated from the source document (`top_k=10`, `retrieval_k=30`).
 
-| Metric | Score |
-|--------|-------|
-| Recall@k=4 | 64% |
-| Recall@k=10 | 72% |
-| Avg query latency | 0.65s |
-| Threshold failures | 0 |
-| Retrieval failures (not in top-20) | 25% |
+| Metric | Vanilla | With Reranking |
+|--------|---------|-----------------|
+| Recall@10 | 72% | **86%** |
+| Precision@1 | 46% | **70%** |
+| MRR | 0.552 | **0.756** |
+| Avg query latency | 0.65s | — |
 
-Cross-encoder reranking tested but showed no recall improvement on current dataset — disabled by default (`use_reranking: false`).
+Cross-encoder reranking (`cross-encoder/ms-marco-MiniLM-L6-v2`) retrieves a wider candidate pool (`retrieval_k=30`) before reranking down to `top_k=10`, letting the reranker surface relevant chunks that the initial vector search alone ranked too low to return. Of 100 questions, reranking flipped 14 misses into hits with zero regressions (no hit became a miss). A McNemar exact test on the paired outcomes gives p ≈ 0.00012. Reranking is enabled by default (`use_reranking: true`).
+
+**Known limitation:** without widening retrieval before reranking, cross-encoder reranking cannot improve recall — it can only reorder candidates the initial search already retrieved. This is why `retrieval_k` must exceed `top_k` for reranking to have any effect.
+
 **Known limitation:** 25% of questions are not retrievable within top-20 results. Root cause is character-based chunking splitting semantic units across chunk boundaries. Sentence-aware chunking (`ingest_v2.py`) was tested but showed lower recall on the current golden dataset due to evaluation bias — the dataset was generated from the original chunks. A human-labeled evaluation dataset would give a fairer comparison.
+
+**Known limitation:** No prompt-injection or input-sanitization defenses are currently implemented; the system relies on the LLM's system prompt instruction to only use retrieved context.
 
 
 ## Project Structure
