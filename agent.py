@@ -20,13 +20,14 @@ from utils import cross_reranking, evalute_with_reranking, get_cross_encoder,log
 load_dotenv()
 OPENAI_KEY = os.getenv('OPEN_AI_KEY')
 CONNECTION_STRING = os.getenv('CONNECTION_KEY')
-print(os.getenv('CONNECTION_KEY'))
 emb_model = OpenAIEmbeddings(openai_api_key=OPENAI_KEY)
 model = ChatOpenAI(
     model="gpt-3.5-turbo",
     openai_api_key=OPENAI_KEY,
     temperature=0
 )
+_async_engine = None
+_db = None
 
 client = OpenAI(api_key=OPENAI_KEY)
 
@@ -56,18 +57,21 @@ Never make up information — only use what tools return.
 
 # initialize async engine
 # for api.py only
-# async_engine = create_engine(CONNECTION_STRING.replace('postgresql://', 'postgresql+asyncpg://'))
 
-sync_engine = create_engine(CONNECTION_STRING)
-
-#async_db = PGVector(embeddings=emb_model, collection_name='ML knowledge', connection = async_engine, create_extension=False)
-
-
-db = PGVector(
+async def get_db():
+    global _async_engine, _db
+    if _db is None:
+        async_connection = CONNECTION_STRING.replace('postgresql://', 'postgresql+asyncpg://')
+        _async_engine = create_async_engine(async_connection)
+        _db = PGVector(
     embeddings=emb_model,
     collection_name='ML knowledge',
-    connection=sync_engine  # test
+    connection=_async_engine,
+    create_extension=False,
 )
+    return _db
+
+
 
 class tool(BaseModel):
     name: str
@@ -78,19 +82,21 @@ class tool(BaseModel):
         arbitrary_types_allowed = True
 
 async def rag_search( query: str)-> str:
+
     string = ""
+    db = await get_db()
     emb_query = await embed_single(emb_model, query)
-    results = db.similarity_search_with_score_by_vector(emb_query, 3)
+    results = await db.asimilarity_search_with_score_by_vector(emb_query, 3)
     filtered_results = [i for i in results if  i[1] <= 0.25]
     if not filtered_results:
         return f"NO chunks found"
-         
-    for doc, score in filtered_results:
-        string += doc.page_content+'\n\n'
-    return string.strip()
+
+    budget_result = build_context_with_budget(filtered_results, threshold=0.25, max_tokens=800)
+    return "\n\n".join(doc.page_content for doc, _ in budget_result)
+    
 
 def calculator(expression):
-    if not re.match(r'^[\d\s\+\-\*\/\(\)\.\^]+$', expression):
+    if not re.match(r'^[\d\s\+\-\*\/\(\)\.]+$', expression):
         return "Error: Invalid characters in expression"
     try:
         result = eval(expression)  # safe — only digits and operators allowed
@@ -111,7 +117,7 @@ def summarize(retrieved_content):
 memory_store = []
 def save_to_memory(question: str, answer: str, session_id : str):
 
-    memory_store.append({'question': question, 'answer': answer, 'session_id': session_id, 'timestamp': datetime.datetime.utcnow().isoformat()})
+    memory_store.append({'question': question, 'answer': answer, 'session_id': session_id, 'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat()})
     return memory_store
 
 def retrieve_memory( n: int  =3):
@@ -229,7 +235,7 @@ async def orchestrator(question, max_attempts):
 async def run_agent(question, max_steps=5, session_id = None,  tools = None, system_prompt =None):
     memory_context = retrieve_memory(n = 3)
     print(f'memory context: {memory_context[:100] if memory_context else "EMPTY" }')
-    system_content = SYSTEM_PROMPT
+    system_content = system_prompt if system_prompt else SYSTEM_PROMPT
     if memory_context:
         system_content += f"\n\n Relevant past conversations: \n {memory_context}"
 
@@ -312,11 +318,17 @@ async def run_agent(question, max_steps=5, session_id = None,  tools = None, sys
                 retrieved_context = observation 
 
         messages.append({'role': 'assistant', 'content': content})
-        messages.append({'role': 'user', 'content': f'OBSERVATION: {str(observation)[:300]}..'})
+        messages.append({'role': 'user', 'content': f'OBSERVATION: {str(observation)[:3000]}..'})
 
     save_to_memory(question, 'Agent reached maximum steps', session_id)
     log_agent_run(session_id, question, final_answer, step, tools_used, False)
     return 'Agent reached maximum steps without finding an answer', retrieved_context
+
+
+class JudgeOutput(BaseModel):
+    faithfulness: int = Field(ge=1, le=5, description="Every claim in the answer is supported by the retrieved context")
+    relevance: int = Field(ge=1, le=5, description="The answer directly addresses the user question")
+    hallucination: int = Field(ge=1, le=5, description="5 = no hallucination, 1 = severe hallucination")
 
 async def llm_judge(user_query, retrieved_chunks, agent_answer):
     judge_prompt = f"""You are an objective evaluation judge. Your task is to evaluate an AI agent's answer based ONLY on the provided retrieved context. You must ignore all outside knowledge.
@@ -336,22 +348,22 @@ async def llm_judge(user_query, retrieved_chunks, agent_answer):
     3. Hallucination (1-5): Scan for entities or claims in the answer that are absent from the context (5 = no hallucination, 1 = severe hallucination).
     """
     structured_model = model.with_structured_output(JudgeOutput)
-    eval_result = structured_model.invoke(input = judge_prompt)
+    eval_result = await structured_model.ainvoke(input = judge_prompt)
 
     return  eval_result
     
 # # --- EXECUTION TEST ---
 
-# async def main():
-#     question = "What is cross validation?"
-#     answer, context = await  run_agent(question)
-#     print("\n--- AGENT RESPONSE ---")
-#     print("ANSWER:", answer)
-#     print("CONTEXT:", context[:150])
+async def main():
+    question = "What is cross validation?"
+    answer, context = await  run_agent(question)
+    print("\n--- AGENT RESPONSE ---")
+    print("ANSWER:", answer)
+    print("CONTEXT:", context[:150])
 
-#     print("\n--- RUNNING LLM JUDGE ---")
-#     judge_result = await llm_judge(question, context, answer)
-#     print("JUDGE SCORES:", judge_result)
+    print("\n--- RUNNING LLM JUDGE ---")
+    judge_result = await llm_judge(question, context, answer)
+    print("JUDGE SCORES:", judge_result)
 
-# if __name__ == "__main__":
-#     asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

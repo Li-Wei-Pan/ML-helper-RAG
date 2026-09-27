@@ -18,12 +18,15 @@ from langchain_postgres import PGVector
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from sqlalchemy.ext.asyncio import create_async_engine
+from fastapi import FastAPI, HTTPException, Security, Depends, status
+from fastapi.security import APIKeyHeader, HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import Field
 from datetime import datetime
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi import Limiter, _rate_limit_exceeded_handler
 import sqlalchemy
+import secrets
 
 OPENAI_KEY = os.getenv('OPEN_AI_KEY')
 CONNECTION_STRING =os.getenv('CONNECTION_KEY_ASYNC')
@@ -32,6 +35,18 @@ MAX_CONTEXT_TOKENS = 2000
 embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_KEY)
 model = ChatOpenAI(
     model="gpt-3.5-turbo", openai_api_key=OPENAI_KEY, temperature=0)
+
+api_key = {os.getenv("API_KEY")} 
+
+
+security_scheme = HTTPBearer()
+def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security_scheme)):
+    API_KEY = {os.getenv("API_KEY")} 
+    if not api_key or not secrets.compare_digest(credentials.credentials, api_key):
+        raise HTTPException(status_code= status.HTTP_401_UNAUTHORIZED, detail = 'Invalid or missing auth token',
+                            headers = {"www-Authenticate": 'Bearer'},)
+    return credentials.credentials
+    
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -51,6 +66,7 @@ async def lifespan(app: FastAPI):
             embeddings=embeddings,
             collection_name="ML knowledge",
             connection=async_engine,
+            create_extension= False
         )
         print('Database connection established!')
         yield
@@ -70,7 +86,7 @@ class QueryRequest(BaseModel):
     top_k : int = Field(default = 10, ge = 1, le = 20)
     session_id: str = Field(default_factory= lambda: str(uuid7()))
     threshold: float = Field(default = 0.25, ge = 0.0, le = 1.0)
-    use_reranking: bool = False
+    use_reranking: bool = True
 
 # source chunk schema
 class SourceChunk(BaseModel):
@@ -142,14 +158,14 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 #apply to endpoint
 @app.post('/query', response_model= QueryResponse)
 @limiter.limit('10/minute') 
-async def query_endpoint(request: Request, body: QueryRequest):
+async def query_endpoint(request: Request, body: QueryRequest, _ :str = Depends(verify_api_key)):
     start_time = time.time()
-    # Step 1 — validate input    
+   
     if not body.question or not body.question.strip():
         raise HTTPException(status_code=422, detail="Question cannot be empty")
     if db is None:
          raise HTTPException(status_code=503, detail = 'Database not initialized')
-    # Step 2 — embed the question
+
     try:
 
         embedded = await embed_single(embeddings, body.question)
@@ -159,28 +175,22 @@ async def query_endpoint(request: Request, body: QueryRequest):
     except APIError:
         raise HTTPException(status_code=503, detail="Embedding service unavailable")  
     
-    # Step 3 — retrieve chunks from pgvector
-    search_results = await db.asimilarity_search_with_score_by_vector(embedded, k = body.top_k)
+
+    search_results = await db.asimilarity_search_with_score_by_vector(embedded, k = body.top_k * 3)
     
-    # async with db._async_engine.connect() as conn: #check if it works
-    #     result = await conn.execute(sqlalchemy.text("SET hnsw.ef_search = 40"))
-    #     row = await conn.execute(sqlalchemy.text("SHOW hnsw.ef_search"))
-    # print(f"ef_search: {row.fetchone()[0]}")
     passing = [(doc, score) for doc, score in search_results if score <= body.threshold] # <= bc of cos distance
     print(f"Before reranking: {len(passing)} chunks")
     
     if body.use_reranking:
         passing = cross_reranking(get_cross_encoder(), body.question, passing)
         passing = passing[:body.top_k]
-        context_text = "\n\n".join([doc.page_content for doc, _ in passing])
-        print(f"After reranking: {len(passing)} chunks")
-        for doc, score in passing:
-            print(f"Reranker score: {score:.4f} | Page: {doc.metadata.get('page')}")
+        budget_result = build_context_with_budget(passing, threshold=body.threshold, max_tokens=MAX_CONTEXT_TOKENS)
+        context_text = "\n\n".join([doc.page_content for doc, _ in budget_result])
     
     else:
-        budget_result = build_context_with_budget(passing, threshold=body.threshold, max_tokens=2000)
+        budget_result = build_context_with_budget(passing, threshold=body.threshold, max_tokens=MAX_CONTEXT_TOKENS)
         context_text = "\n\n".join([doc.page_content for doc, _ in budget_result])
-    # context_text = "\n\n".join([doc.page_content for doc, _ in passing])
+    
     print(f"Context length: {len(context_text)}")
     # Step 4 — build context
     
@@ -193,7 +203,7 @@ async def query_endpoint(request: Request, body: QueryRequest):
     
     context = build_context_with_budget(passing, threshold = body.threshold, max_tokens = MAX_CONTEXT_TOKENS) 
     extract_context = [doc for doc, _ in context]
-    context_text = "\n\n".join([doc.page_content for doc in extract_context])
+    # context_text = "\n\n".join([doc.page_content for doc in extract_context])
 
     # Step 5 — call LLM
     
@@ -206,7 +216,6 @@ async def query_endpoint(request: Request, body: QueryRequest):
         sources=[]
     )
          
-    
     try:
         result = await asyncio.wait_for(chain.ainvoke({'question': body.question, 'context': context_text},config={"configurable": {"session_id": body.session_id}}), timeout= 30)
     
@@ -216,7 +225,6 @@ async def query_endpoint(request: Request, body: QueryRequest):
     duration = time.time() - start_time
     api_log_request(body, result,duration, context_text)
     
-
     return QueryResponse(
         answer= result.answer,
         topic=result.topic,
@@ -240,7 +248,7 @@ class AgentResponse(BaseModel):
 
 @app.post('/agent', response_model= AgentResponse)
 @limiter.limit('2/minute')
-async def agent_api(request: Request, body: AgentRequest):
+async def agent_api(request: Request, body: AgentRequest, _ : str = Depends(verify_api_key)):
     from agent import run_agent
     start_time = time.time()
     if not body.question or not body.question.strip():

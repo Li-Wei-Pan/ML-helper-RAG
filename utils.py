@@ -1,7 +1,15 @@
 # utils.py
+
+    
 import tiktoken
 import nltk
-nltk.download('punkt_tab')
+from nltk.tokenize import sent_tokenize
+try:
+    nltk.data.find('tokenizers/punkt_tab')
+except LookupError:
+    nltk.download('punkt_tab')
+import datetime
+#nltk.download('punkt_tab')
 import json
 import time
 import asyncio
@@ -21,9 +29,10 @@ from datetime import datetime
 from typing import Callable, Any
 from sentence_transformers import CrossEncoder
 from dotenv import load_dotenv
-from nltk.tokenize import sent_tokenize
+
 
 load_dotenv()
+
 OPENAI_KEY = os.getenv('OPEN_AI_KEY')
 CONNECTION_STRING = os.getenv('CONNECTION_KEY')
 MAX_CONTEXT_TOKENS = 2000
@@ -73,13 +82,6 @@ def sentence_aware_chunker(texts, max_tokens = 500, overlap_sentence = 2, encodi
         chunks.append(" ".join(batch_chunk))  
     return chunks
             
-            
-sample = "Machine learning is a subset of AI. It enables computers to learn from data. Neural networks are inspired by the brain. They consist of layers of neurons. Deep learning uses many layers."
-chunks = sentence_aware_chunker(sample, max_tokens=20, overlap_sentence=1)
-for i, chunk in enumerate(chunks):
-    print(f"Chunk {i+1}: {chunk}")
-# sentence_aware_chunker('testing new thing')
-
 
 
 def build_context_with_budget(raw_results, threshold, max_tokens, encoding_name = 'cl100k_base'):
@@ -197,7 +199,7 @@ def estimate_cost(input_tokens: int, output_tokens: int) -> float:
 
 
 
-cross_enc_mod = CrossEncoder('cross-encoder/ms-marco-MiniLM-L6-v2')
+
 
 def cross_reranking(cross_model, query, retrieved_chunks):
     raw_pairs = [[query, chunk[0].page_content] for chunk in retrieved_chunks]
@@ -209,26 +211,6 @@ def cross_reranking(cross_model, query, retrieved_chunks):
     return sorted_results
 
 
-
-def evalute_with_reranking(golden_dataset, embedding_model, db, cross_model, top_k, threshold):
-    vanilla_hits = 0
-    cross_hits = 0
-
-    for item in golden_dataset:
-        embedded_q = embedding_model.embed_query(item['question'])
-        raw_results = db.similarity_search_with_score_by_vector(embedded_q, top_k)
-        filtered = [(doc,score) for doc,score in raw_results if score <= threshold]
-        sorted_results = cross_reranking(cross_model, item['question'], filtered)
-
-        vanilla_pages = [doc.metadata.get('page') for doc,score in raw_results if score <= threshold]
-        reranked_pages = [doc.metadata.get('page') for doc, score in sorted_results[:top_k]]
-
-        if item['expected_page'] in vanilla_pages:
-            vanilla_hits+=1
-        if item['expected_page'] in reranked_pages:
-            cross_hits += 1
-        
-    return f"Vanilla's recall@k: {vanilla_hits} | Cross encoder's recall@k: {cross_hits}"
 
 _cross_encoder = None
 
@@ -343,26 +325,60 @@ def build_golden_dataset(db, embeddings, engine, n_chunks = 25, question_per_chu
 
     return json_data
     
-def evalute_with_reranking(golden_dataset, embedding_model, db, cross_model, top_k, threshold):
+def evalute_with_reranking(golden_dataset, embedding_model, db, cross_model, top_k, threshold,retrieval_k=None, results_path = 'eval_results.json'):
+    per_question = []
     vanilla_hits = 0
     cross_hits = 0
+    retrieval_k = retrieval_k or top_k * 3 
 
     for item in golden_dataset:
         embedded_q = embedding_model.embed_query(item['question'])
-        raw_results = db.similarity_search_with_score_by_vector(embedded_q, top_k)
+        raw_results = db.similarity_search_with_score_by_vector(embedded_q, retrieval_k)
         filtered = [(doc,score) for doc,score in raw_results if score <= threshold]
         sorted_results = cross_reranking(cross_model, item['question'], filtered)
 
-        vanilla_pages = [doc.metadata.get('page') for doc,score in raw_results if score <= threshold]
+        #flipped_results = len(raw_results) / len(sorted_results) #how many flip from miss to hit
+        vanilla_pages = [doc.metadata.get('page') for doc,score in filtered[:top_k] if score <= threshold]
         reranked_pages = [doc.metadata.get('page') for doc, score in sorted_results[:top_k]]
 
-        if item['expected_page'] in vanilla_pages:
-            vanilla_hits+=1
-        if item['expected_page'] in reranked_pages:
-            cross_hits += 1
+        vanilla_hit = item['expected_page'] in vanilla_pages
         
-    return f"Vanilla's recall@k: {vanilla_hits } | Cross encoder's recall@k: {cross_hits}"
+        cross_hit = item['expected_page'] in reranked_pages
 
+        vanilla_hits += vanilla_hit
+        cross_hits += cross_hit
+
+        per_question.append({
+            'question': item['question'],
+            'expected_page': item['expected_page'],
+            'vanilla_pages': vanilla_pages,
+            'reranked_pages': reranked_pages,
+            'vanilla_hit': vanilla_hit,
+            'cross_hit': cross_hit,
+        })
+        
+    summary = {
+        'timestamp': datetime.now().isoformat(),
+        'n_questions': len(golden_dataset),
+        'top_k': top_k,
+        'retrieval_k': retrieval_k,
+        'threshold': threshold,
+        'vanilla_hits': vanilla_hits,
+        'cross_hits': cross_hits,
+        'vanilla_recall_at_k': round(vanilla_hits / len(golden_dataset), 4) if len(golden_dataset) else 0.0,
+        'cross_recall_at_k': round(cross_hits / len(golden_dataset), 4) if len(golden_dataset) else 0.0,
+        'per_question': per_question,
+    }
+    history = []
+    if os.path.exists(results_path):
+        with open(results_path, 'r')as f:
+            history = json.load(f)
+    history.append(summary)
+
+    with open(results_path, 'w')as f:
+        json.dump(history, f, indent = 2)
+
+    return summary
 
 
 def log_agent_run(session_id, question, final_answer, steps_taken, tools_used, success):

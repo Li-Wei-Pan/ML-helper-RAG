@@ -77,24 +77,24 @@ def run_evaluation():
 
 
     print(f"Total questions: {len(expanded_dataset)}")
-    result = evalute_with_reranking(expanded_dataset, emb_model, db, get_cross_encoder(), top_k= 10, threshold= 0.25)
+    #result = evalute_with_reranking(expanded_dataset[:5], emb_model, db, get_cross_encoder(), top_k= 10, threshold= 0.25)
 #     result_v2 = evalute_with_reranking(
 #     expanded_dataset, emb_model, db_v2, 
 #     get_cross_encoder(), top_k=10, threshold=0.25
 # )
-    result_4 = evalute_with_reranking(expanded_dataset, emb_model, db, get_cross_encoder(), top_k=4, threshold=0.25)
-    result_10 = evalute_with_reranking(expanded_dataset, emb_model, db, get_cross_encoder(), top_k=10, threshold=0.25)
+    result_4 = evalute_with_reranking(expanded_dataset[:100], emb_model, db, get_cross_encoder(), top_k=4, threshold=0.25)
+    result_10 = evalute_with_reranking(expanded_dataset[:100], emb_model, db, get_cross_encoder(), top_k=10, threshold=0.25)
 
-    diagnose_recall_failures(expanded_dataset, emb_model, db_v2, top_k=10, threshold=0.25)
+    diagnose_recall_failures(expanded_dataset[:100], emb_model, db, top_k=10, threshold=0.25)
     duration = time.time() - start
     
     print("=== RAG Evaluation Report ===")
-    print(f"Dataset: {len(expanded_dataset)} questions")
-    print(f"result v2:  {result}")
+    print(f"Dataset: {len(expanded_dataset[:100])} questions")
+    #print(f"result :  {result}")
     print(f"top_k=4:  {result_4}")
     print(f"top_k=10: {result_10}")
     print(f"Total eval time: {duration:.1f}s")
-    print(f"Avg per query: {duration/len(expanded_dataset):.3f}s")
+    print(f"Avg per query: {duration/len(expanded_dataset[:100]):.3f}s")
     print("=============================")
 
 if __name__ == '__main__':
