@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main, testing]
+  pull_request:
+    branches: [main, testing]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_DB: testdb
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        run: uv pip install --system .
+
+      - name: Seed test database
+        run: python scripts/seed_test_db.py
+        env:
+          OPEN_AI_KEY: ${{ secrets.OPEN_AI_KEY }}
+          CONNECTION_KEY_ASYNC: postgresql://testuser:testpass@localhost:5432/testdb
+
+
+      - name: Run tests
+        run: pytest tests/test_api.py -v
+        env:
+          OPEN_AI_KEY: ${{ secrets.OPEN_AI_KEY }}
+          CONNECTION_KEY: postgresql://testuser:testpass@localhost:5432/testdb
+          CONNECTION_KEY_ASYNC: postgresql://testuser:testpass@localhost:5432/testdb
